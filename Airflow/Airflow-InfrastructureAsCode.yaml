@@ -1,0 +1,129 @@
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access into the server
+    Type: AWS::EC2::KeyPair::KeyName
+  VpcId:
+    Description: Enter the VpcId
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Description: Enter the SubnetId
+    Type: AWS::EC2::Subnet::Id
+  StackName:
+    Description: Enter the Stack Name
+    Type: String
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-0ac019f4fcb7cb7e6
+    us-east-2:
+      AMI: ami-0f65671a86f061fcd
+    us-west-1:
+      AMI: ami-063aa838bd7631e0b
+    us-west-2:
+      AMI: ami-0bbe6b35405ecebdb
+Resources:
+  AirflowEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId:
+        Fn::FindInMap:
+        - RegionMap
+        - !Ref AWS::Region
+        - AMI
+      SecurityGroupIds:
+        - !Ref AirflowSecurityGroup
+      SubnetId: !Ref SubnetId
+      Tags:
+        - Key: Name
+          Value: Airflow EC2 Instance
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Sub '${AirflowEC2InstanceProfile}'
+      UserData:
+        'Fn::Base64': 
+          !Sub |
+            #!/bin/bash -xe            
+            sudo su
+            bash
+            apt-get update
+            apt-get install python-pip -y
+            export SLUGIFY_USES_TEXT_UNIDECODE=yes
+            pip install apache-airflow
+            mkdir ~/airflow
+            source ~/.profile
+            pip install apache-airflow[hive]
+            airflow initdb
+            pip install apache-airflow[password]
+            nohup airflow webserver $* >> ~/airflow/logs/webserver.logs &
+            nohup airflow scheduler >> ~/airflow/logs/scheduler.logs &
+            nohup airflow worker $* >> ~/airflow/logs/worker.logs &
+            cd ~/airflow
+            mkdir dags
+            apt install docker.io -y
+            service docker start
+            apt install awscli -y
+            head -n -1 /etc/crontab > /etc/tempcrontab ; mv /etc/tempcrontab /etc/crontab
+            printf "*  *    * * *   root    aws s3 sync s3://airflow-dags-${StackName}/ ~/airflow/dags/" >> /etc/crontab
+            printf "\n#\n" >> /etc/crontab
+            apt install mysql-server-5.7 -y
+            replace "dags_are_paused_at_creation = True" "dags_are_paused_at_creation = False" -- ~/airflow/airflow.cfg
+  AirflowSecurityGroup: # Todo: Make Security Groups more restrictive to allow only internal IPs to access the EC2
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Open Ports 22 and 8080
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '8080'
+        ToPort: '8080'
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: Airflow EC2 Security Group
+      VpcId: !Ref VpcId
+  AirflowDAGS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub airflow-dags-${StackName}
+      AccessControl: Private
+  AirflowEC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: airflowS3BucketPolicy
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: Allow
+            Action:
+              - "s3:List*"
+              - "s3:Get*"
+            Resource:
+              - !Sub '${AirflowDAGS3Bucket.Arn}/*'
+              - !Sub '${AirflowDAGS3Bucket.Arn}'
+  AirflowEC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Sub '${AirflowEC2Role}'
+      InstanceProfileName: airflowInstanceProfile
+Outputs:
+  AirflowConsoleEndpoint:
+    Description: Airflow UI endpoint
+    Value: !Sub 'http://${AirflowEC2Instance.PublicDnsName}:8080/admin'
+  AirflowBucket:
+    Description: Airflow bucket name
+    Value: !Sub '${AirflowDAGS3Bucket.Arn}'
