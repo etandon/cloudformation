@@ -52,6 +52,7 @@ Resources:
             mkdir ~/airflow
             source ~/.profile
             pip install apache-airflow[hive]
+            replace "dags_are_paused_at_creation = True" "dags_are_paused_at_creation = False" -- ~/airflow/airflow.cfg
             airflow initdb
             pip install apache-airflow[password]
             nohup airflow webserver $* >> ~/airflow/logs/webserver.logs &
@@ -66,7 +67,6 @@ Resources:
             printf "*  *    * * *   root    aws s3 sync s3://airflow-dags-${StackName}/ ~/airflow/dags/" >> /etc/crontab
             printf "\n#\n" >> /etc/crontab
             apt install mysql-server-5.7 -y
-            replace "dags_are_paused_at_creation = True" "dags_are_paused_at_creation = False" -- ~/airflow/airflow.cfg
   AirflowSecurityGroup: # Todo: Make Security Groups more restrictive to allow only internal IPs to access the EC2
     Type: AWS::EC2::SecurityGroup
     Properties:
